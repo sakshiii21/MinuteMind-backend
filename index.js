@@ -13,13 +13,13 @@ const app = express();
 
 // ---------------- MIDDLEWARE ---------------- //
 app.use(cors({
-  origin: process.env.FRONTEND_URL, // e.g. http://localhost:3000 or deployed frontend
+  origin: process.env.FRONTEND_URL,
   credentials: true,
 }));
 
 app.use(express.json());
 
-// Trust proxy for cookies when deployed (Render/Heroku/Vercel backend)
+// Trust proxy for cookies on deployed platforms
 app.set("trust proxy", 1);
 
 app.use(session({
@@ -28,19 +28,14 @@ app.use(session({
   saveUninitialized: true,
   cookie: {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production", // only use https cookies in production
+    secure: process.env.NODE_ENV === "production",
     sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
   },
 }));
 
 // ---------------- SERVICES ---------------- //
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// Groq SDK
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
-
-// Google OAuth client
 const oAuth2Client = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
   process.env.GMAIL_CLIENT_SECRET,
@@ -48,33 +43,12 @@ const oAuth2Client = new google.auth.OAuth2(
 );
 
 // ---------------- ROUTES ---------------- //
-
 // Test route
-app.get("/", (req, res) => {
-  res.send("🚀 MinuteMind Backend Running");
-});
+app.get("/", (req, res) => res.send("🚀 MinuteMind Backend Running"));
 
 // Step 1: Google login redirect
 app.get("/auth/google", (req, res) => {
-  // allow frontend to specify redirect page (default: dashboard)
   const state = req.query.state || "dashboard";
-
-  const url = oAuth2Client.generateAuthUrl({
-    access_type: "offline",
-    prompt: "consent",
-    scope: [
-      "https://www.googleapis.com/auth/userinfo.email",
-      "https://www.googleapis.com/auth/userinfo.profile",
-      "https://www.googleapis.com/auth/gmail.send"
-    ],
-    state, // pass through to callback
-  });
-
-  res.redirect(url);
-});
-
-app.get("/auth/google", (req, res) => {
-  const state = req.query.state || "dashboard"; // string
   const url = oAuth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
@@ -88,47 +62,38 @@ app.get("/auth/google", (req, res) => {
   res.redirect(url);
 });
 
-// // Step 2: Google OAuth callback
-// app.get("/auth/google/callback", async (req, res) => {
-//   try {
-//     const { code, state } = req.query;
-//     const { tokens } = await oAuth2Client.getToken(code);
-//     oAuth2Client.setCredentials(tokens);
+// Step 2: Google OAuth callback
+app.get("/auth/google/callback", async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    const { tokens } = await oAuth2Client.getToken(code);
+    oAuth2Client.setCredentials(tokens);
 
-//     // Fetch user profile
-//     const oauth2 = google.oauth2({ version: "v2", auth: oAuth2Client });
-//     const { data } = await oauth2.userinfo.get();
+    const oauth2 = google.oauth2({ version: "v2", auth: oAuth2Client });
+    const { data } = await oauth2.userinfo.get();
 
-//     // Save user in session
-//     req.session.user = {
-//       email: data.email,
-//       name: data.name,
-//       picture: data.picture,
-//       tokens,
-//     };
+    req.session.user = {
+      email: data.email,
+      name: data.name,
+      picture: data.picture,
+      tokens,
+    };
 
-//     console.log("✅ Logged in user:", data.email);
+    console.log("✅ Logged in user:", data.email);
 
-//     // Redirect back to frontend
-//     const redirectPath = state || "dashboard";
-//     res.redirect(`${process.env.FRONTEND_URL}/${redirectPath}`);
-//   } catch (err) {
-//     console.error("OAuth Error:", err);
-//     res.status(500).send("Authentication Failed");
-//   }
-// });
+    const redirectPath = state || "dashboard";
+    res.redirect(`${process.env.FRONTEND_URL}/${redirectPath}`);
+  } catch (err) {
+    console.error("OAuth Error:", err);
+    res.status(500).send("Authentication Failed");
+  }
+});
 
 // Logged-in user info
 app.get("/api/me", (req, res) => {
-  if (!req.session.user) {
-    return res.status(401).json({ loggedIn: false });
-  }
-  res.json({
-    loggedIn: true,
-    email: req.session.user.email,
-    name: req.session.user.name,
-    picture: req.session.user.picture,
-  });
+  if (!req.session.user) return res.status(401).json({ loggedIn: false });
+  const { email, name, picture } = req.session.user;
+  res.json({ loggedIn: true, email, name, picture });
 });
 
 // AI Summary route
@@ -152,31 +117,22 @@ app.post("/api/summarize", async (req, res) => {
   }
 });
 
-// Email sending (using logged-in user)
+// Send email via logged-in user's Gmail
 app.post("/api/send-email", async (req, res) => {
   try {
-    if (!req.session.user) {
-      return res.status(401).json({ error: "Not authenticated" });
-    }
+    if (!req.session.user) return res.status(401).json({ error: "Not authenticated" });
 
     const { to, subject, content } = req.body;
     const { email, tokens } = req.session.user;
 
-    if (!to || !subject || !content) {
-      return res.status(400).json({ error: "Missing email fields" });
-    }
+    if (!to || !subject || !content) return res.status(400).json({ error: "Missing email fields" });
 
-    // Refresh with user tokens
     oAuth2Client.setCredentials(tokens);
-
     const accessTokenObj = await oAuth2Client.getAccessToken();
     const accessToken = accessTokenObj?.token;
 
-    if (!accessToken) {
-      return res.status(500).json({ error: "Failed to retrieve access token" });
-    }
+    if (!accessToken) return res.status(500).json({ error: "Failed to retrieve access token" });
 
-    // Nodemailer transporter with user’s Gmail
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
@@ -189,13 +145,7 @@ app.post("/api/send-email", async (req, res) => {
       },
     });
 
-    const info = await transporter.sendMail({
-      from: email,
-      to,
-      subject,
-      text: content,
-    });
-
+    const info = await transporter.sendMail({ from: email, to, subject, text: content });
     console.log("📧 Email sent:", info.response);
     res.json({ success: true });
   } catch (error) {
