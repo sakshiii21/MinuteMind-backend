@@ -10,11 +10,11 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors({ origin: "http://localhost:3000", credentials: true }));
+app.use(cors({ origin: "*", credentials: true }));
 app.use(express.json());
 
 app.use(session({
-  secret: process.env.SESSION_SECRET || "supersecret",
+  secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: true,
   cookie: { httpOnly: true, secure: false, sameSite: "lax" },
@@ -31,7 +31,7 @@ const oAuth2Client = new google.auth.OAuth2(
 app.get("/", (req, res) => res.send("MinuteMind Backend Running"));
 
 app.get("/auth/google", (req, res) => {
-  const state = req.query.state || "/";
+  const state = req.query.state || "dashboard";
   const url = oAuth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
@@ -47,7 +47,7 @@ app.get("/auth/google", (req, res) => {
 
 app.get("/auth/google/callback", async (req, res) => {
   try {
-    const { code } = req.query;
+    const { code, state } = req.query;
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
 
@@ -61,8 +61,9 @@ app.get("/auth/google/callback", async (req, res) => {
       tokens,
     };
 
-    res.redirect(`${process.env.FRONTEND_URL}`);
- 
+    const redirectPath = state || "/"; 
+    res.redirect(`https://minutemind-frontend.onrender.com/${redirectPath}`);
+
   } catch {
     res.status(500).send("Authentication Failed");
   }
@@ -125,5 +126,4 @@ app.post("/api/send-email", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+app.listen(process.env.PORT, () => console.log(`Server running on http://localhost:${process.env.PORT}`));
