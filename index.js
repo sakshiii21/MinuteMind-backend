@@ -1,4 +1,3 @@
-// server/server.js
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -11,29 +10,16 @@ dotenv.config();
 
 const app = express();
 
-// ---------------- MIDDLEWARE ---------------- //
-app.use(cors({
-  origin: process.env.FRONTEND_URL,
-  credentials: true,
-}));
-
+app.use(cors({ origin: "*", credentials: true }));
 app.use(express.json());
 
-// Trust proxy for cookies on deployed platforms
-app.set("trust proxy", 1);
-
 app.use(session({
-  secret: process.env.SESSION_SECRET || "supersecret",
+  secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: true,
-  cookie: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-  },
+  cookie: { httpOnly: true, secure: false, sameSite: "lax" },
 }));
 
-// ---------------- SERVICES ---------------- //
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const oAuth2Client = new google.auth.OAuth2(
@@ -42,11 +28,8 @@ const oAuth2Client = new google.auth.OAuth2(
   process.env.GMAIL_REDIRECT_URI
 );
 
-// ---------------- ROUTES ---------------- //
-// Test route
-app.get("/", (req, res) => res.send("🚀 MinuteMind Backend Running"));
+app.get("/", (req, res) => res.send("MinuteMind Backend Running"));
 
-// Step 1: Google login redirect
 app.get("/auth/google", (req, res) => {
   const state = req.query.state || "dashboard";
   const url = oAuth2Client.generateAuthUrl({
@@ -62,7 +45,6 @@ app.get("/auth/google", (req, res) => {
   res.redirect(url);
 });
 
-// Step 2: Google OAuth callback
 app.get("/auth/google/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
@@ -79,28 +61,22 @@ app.get("/auth/google/callback", async (req, res) => {
       tokens,
     };
 
-    console.log("✅ Logged in user:", data.email);
-
     const redirectPath = state || "dashboard";
-    res.redirect(`${process.env.FRONTEND_URL}/${redirectPath}`);
-  } catch (err) {
-    console.error("OAuth Error:", err);
+    res.redirect(`https://minutemind-frontend.onrender.com/${redirectPath}`);
+  } catch {
     res.status(500).send("Authentication Failed");
   }
 });
 
-// Logged-in user info
 app.get("/api/me", (req, res) => {
   if (!req.session.user) return res.status(401).json({ loggedIn: false });
   const { email, name, picture } = req.session.user;
   res.json({ loggedIn: true, email, name, picture });
 });
 
-// AI Summary route
 app.post("/api/summarize", async (req, res) => {
   try {
     const { transcript, prompt } = req.body;
-
     const completion = await groq.chat.completions.create({
       model: "llama-3.1-8b-instant",
       messages: [
@@ -108,16 +84,13 @@ app.post("/api/summarize", async (req, res) => {
         { role: "user", content: `${prompt}\n\nTranscript:\n${transcript}` },
       ],
     });
-
     const summary = completion.choices[0]?.message?.content || "No summary generated.";
     res.json({ summary });
-  } catch (error) {
-    console.error("Summarization error:", error);
+  } catch {
     res.status(500).json({ error: "Failed to summarize" });
   }
 });
 
-// Send email via logged-in user's Gmail
 app.post("/api/send-email", async (req, res) => {
   try {
     if (!req.session.user) return res.status(401).json({ error: "Not authenticated" });
@@ -145,15 +118,11 @@ app.post("/api/send-email", async (req, res) => {
       },
     });
 
-    const info = await transporter.sendMail({ from: email, to, subject, text: content });
-    console.log("📧 Email sent:", info.response);
+    await transporter.sendMail({ from: email, to, subject, text: content });
     res.json({ success: true });
-  } catch (error) {
-    console.error("Email error:", error);
-    res.status(500).json({ error: "Failed to send email", details: error.toString() });
+  } catch {
+    res.status(500).json({ error: "Failed to send email" });
   }
 });
 
-// ---------------- START SERVER ---------------- //
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`✅ Server running on http://localhost:${PORT}`));
+app.listen(process.env.PORT, () => console.log(`Server running on http://localhost:${process.env.PORT}`));
