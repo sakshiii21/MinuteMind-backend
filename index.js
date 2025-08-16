@@ -11,35 +11,36 @@ dotenv.config();
 
 const app = express();
 
-// CORS setup (allow frontend to send cookies)
+// ---------------- MIDDLEWARE ---------------- //
 app.use(cors({
-  origin: process.env.FRONTEND_URL, // e.g. http://localhost:3000 or Vercel domain
+  origin: process.env.FRONTEND_URL, // e.g. http://localhost:3000 or deployed frontend
   credentials: true,
 }));
 
 app.use(express.json());
 
-// Trust proxy (needed for cookies on Render/Heroku)
+// Trust proxy for cookies when deployed (Render/Heroku/Vercel backend)
 app.set("trust proxy", 1);
 
-// Session setup
 app.use(session({
   secret: process.env.SESSION_SECRET || "supersecret",
   resave: false,
   saveUninitialized: true,
   cookie: {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production", // only https in prod
+    secure: process.env.NODE_ENV === "production", // only use https cookies in production
     sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
   },
 }));
 
-// Initialize Groq SDK
+// ---------------- SERVICES ---------------- //
+
+// Groq SDK
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
-// Google OAuth setup
+// Google OAuth client
 const oAuth2Client = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
   process.env.GMAIL_CLIENT_SECRET,
@@ -48,13 +49,16 @@ const oAuth2Client = new google.auth.OAuth2(
 
 // ---------------- ROUTES ---------------- //
 
-// Test Route
+// Test route
 app.get("/", (req, res) => {
-  res.send("Server is running ✅");
+  res.send("🚀 MinuteMind Backend Running");
 });
 
-// Step 1: Redirect to Google login
+// Step 1: Google login redirect
 app.get("/auth/google", (req, res) => {
+  // allow frontend to specify redirect page (default: dashboard)
+  const state = req.query.state || "dashboard";
+
   const url = oAuth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
@@ -63,23 +67,24 @@ app.get("/auth/google", (req, res) => {
       "https://www.googleapis.com/auth/userinfo.profile",
       "https://www.googleapis.com/auth/gmail.send"
     ],
+    state, // pass through to callback
   });
+
   res.redirect(url);
 });
 
-// Step 2: Google callback
+// Step 2: Google OAuth callback
 app.get("/auth/google/callback", async (req, res) => {
   try {
-    const { code } = req.query;
+    const { code, state } = req.query;
     const { tokens } = await oAuth2Client.getToken(code);
-
     oAuth2Client.setCredentials(tokens);
 
-    // Get user profile
+    // Fetch user profile
     const oauth2 = google.oauth2({ version: "v2", auth: oAuth2Client });
     const { data } = await oauth2.userinfo.get();
 
-    // Store in session
+    // Save user in session
     req.session.user = {
       email: data.email,
       name: data.name,
@@ -87,15 +92,18 @@ app.get("/auth/google/callback", async (req, res) => {
       tokens,
     };
 
-    // Redirect to frontend
-    res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
+    console.log("✅ Logged in user:", data.email);
+
+    // Redirect back to frontend
+    const redirectPath = state || "dashboard";
+    res.redirect(`${process.env.FRONTEND_URL}/${redirectPath}`);
   } catch (err) {
     console.error("OAuth Error:", err);
     res.status(500).send("Authentication Failed");
   }
 });
 
-// Check if logged in
+// Logged-in user info
 app.get("/api/me", (req, res) => {
   if (!req.session.user) {
     return res.status(401).json({ loggedIn: false });
@@ -108,7 +116,7 @@ app.get("/api/me", (req, res) => {
   });
 });
 
-// AI Summary
+// AI Summary route
 app.post("/api/summarize", async (req, res) => {
   try {
     const { transcript, prompt } = req.body;
@@ -129,7 +137,7 @@ app.post("/api/summarize", async (req, res) => {
   }
 });
 
-// Email Sending (uses logged-in account)
+// Email sending (using logged-in user)
 app.post("/api/send-email", async (req, res) => {
   try {
     if (!req.session.user) {
@@ -143,7 +151,7 @@ app.post("/api/send-email", async (req, res) => {
       return res.status(400).json({ error: "Missing email fields" });
     }
 
-    // Refresh client with user tokens
+    // Refresh with user tokens
     oAuth2Client.setCredentials(tokens);
 
     const accessTokenObj = await oAuth2Client.getAccessToken();
@@ -153,7 +161,7 @@ app.post("/api/send-email", async (req, res) => {
       return res.status(500).json({ error: "Failed to retrieve access token" });
     }
 
-    // Nodemailer transporter
+    // Nodemailer transporter with user’s Gmail
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
@@ -173,7 +181,7 @@ app.post("/api/send-email", async (req, res) => {
       text: content,
     });
 
-    console.log("Email sent:", info.response);
+    console.log("📧 Email sent:", info.response);
     res.json({ success: true });
   } catch (error) {
     console.error("Email error:", error);
@@ -183,4 +191,4 @@ app.post("/api/send-email", async (req, res) => {
 
 // ---------------- START SERVER ---------------- //
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`✅ Server running on http://localhost:${PORT}`));
