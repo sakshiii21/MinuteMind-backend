@@ -73,35 +73,50 @@ app.get("/auth/google", (req, res) => {
   res.redirect(url);
 });
 
-// Step 2: Google OAuth callback
-app.get("/auth/google/callback", async (req, res) => {
-  try {
-    const { code, state } = req.query;
-    const { tokens } = await oAuth2Client.getToken(code);
-    oAuth2Client.setCredentials(tokens);
-
-    // Fetch user profile
-    const oauth2 = google.oauth2({ version: "v2", auth: oAuth2Client });
-    const { data } = await oauth2.userinfo.get();
-
-    // Save user in session
-    req.session.user = {
-      email: data.email,
-      name: data.name,
-      picture: data.picture,
-      tokens,
-    };
-
-    console.log("✅ Logged in user:", data.email);
-
-    // Redirect back to frontend
-    const redirectPath = state || "dashboard";
-    res.redirect(`${process.env.FRONTEND_URL}/${redirectPath}`);
-  } catch (err) {
-    console.error("OAuth Error:", err);
-    res.status(500).send("Authentication Failed");
-  }
+app.get("/auth/google", (req, res) => {
+  const state = req.query.state || "dashboard"; // string
+  const url = oAuth2Client.generateAuthUrl({
+    access_type: "offline",
+    prompt: "consent",
+    scope: [
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile",
+      "https://www.googleapis.com/auth/gmail.send"
+    ],
+    state,
+  });
+  res.redirect(url);
 });
+
+// // Step 2: Google OAuth callback
+// app.get("/auth/google/callback", async (req, res) => {
+//   try {
+//     const { code, state } = req.query;
+//     const { tokens } = await oAuth2Client.getToken(code);
+//     oAuth2Client.setCredentials(tokens);
+
+//     // Fetch user profile
+//     const oauth2 = google.oauth2({ version: "v2", auth: oAuth2Client });
+//     const { data } = await oauth2.userinfo.get();
+
+//     // Save user in session
+//     req.session.user = {
+//       email: data.email,
+//       name: data.name,
+//       picture: data.picture,
+//       tokens,
+//     };
+
+//     console.log("✅ Logged in user:", data.email);
+
+//     // Redirect back to frontend
+//     const redirectPath = state || "dashboard";
+//     res.redirect(`${process.env.FRONTEND_URL}/${redirectPath}`);
+//   } catch (err) {
+//     console.error("OAuth Error:", err);
+//     res.status(500).send("Authentication Failed");
+//   }
+// });
 
 // Logged-in user info
 app.get("/api/me", (req, res) => {
