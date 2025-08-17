@@ -9,16 +9,39 @@ import session from "express-session";
 dotenv.config();
 
 const app = express();
+const allowedOrigins = [
+  "http://localhost:5317",
+  "https://minutemind-frontend.onrender.com",
+  "https://minutemind-frontend.vercel.app"
+];
 
-app.use(cors({ origin: "*", credentials: true }));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      } else {
+        return callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 
-app.use(session({
-  secret: process.env.SESSION_SECRET,
-  resave: false,
-  saveUninitialized: true,
-  cookie: { httpOnly: true, secure: false, sameSite: "lax" },
-}));
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: true,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    },
+  })
+);
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -30,7 +53,6 @@ const oAuth2Client = new google.auth.OAuth2(
 
 app.get("/", (req, res) => res.send("MinuteMind Backend Running"));
 
-// Start Google OAuth
 app.get("/auth/google", (req, res) => {
   const state = req.query.state || "dashboard";
   const url = oAuth2Client.generateAuthUrl({
@@ -46,7 +68,6 @@ app.get("/auth/google", (req, res) => {
   res.redirect(url);
 });
 
-// Google OAuth callback
 app.get("/auth/google/callback", async (req, res) => {
   try {
     const { code } = req.query;
@@ -63,7 +84,6 @@ app.get("/auth/google/callback", async (req, res) => {
       tokens,
     };
 
-    // Redirect frontend depending on environment
     const redirectURL =
       process.env.NODE_ENV === "production"
         ? `https://minutemind-frontend.onrender.com/dashboard`
@@ -76,14 +96,12 @@ app.get("/auth/google/callback", async (req, res) => {
   }
 });
 
-// Get current user info
 app.get("/api/me", (req, res) => {
   if (!req.session.user) return res.status(401).json({ loggedIn: false });
   const { email, name, picture } = req.session.user;
   res.json({ loggedIn: true, email, name, picture });
 });
 
-// Summarize endpoint
 app.post("/api/summarize", async (req, res) => {
   try {
     const { transcript, prompt } = req.body;
@@ -101,7 +119,6 @@ app.post("/api/summarize", async (req, res) => {
   }
 });
 
-// Send email endpoint
 app.post("/api/send-email", async (req, res) => {
   try {
     if (!req.session.user) return res.status(401).json({ error: "Not authenticated" });
