@@ -4,107 +4,23 @@ import dotenv from "dotenv";
 import Groq from "groq-sdk";
 import { google } from "googleapis";
 import nodemailer from "nodemailer";
-import session from "express-session";
 
 dotenv.config();
 
 const app = express();
-const allowedOrigins = [
-  "http://localhost:5317",
-  "https://minutemind-frontend.onrender.com",
-  "https://minutemind-frontend.vercel.app"
-];
-
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      } else {
-        return callback(new Error("Not allowed by CORS"));
-      }
-    },
-    credentials: true,
-  })
-);
+app.use(cors());
 app.use(express.json());
-
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: true,
-    cookie: {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-    },
-  })
-);
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-const oAuth2Client = new google.auth.OAuth2(
-  process.env.GMAIL_CLIENT_ID,
-  process.env.GMAIL_CLIENT_SECRET,
-  process.env.GMAIL_REDIRECT_URI
-);
-
-app.get("/", (req, res) => res.send("MinuteMind Backend Running"));
-
-app.get("/auth/google", (req, res) => {
-  const state = req.query.state || "dashboard";
-  const url = oAuth2Client.generateAuthUrl({
-    access_type: "offline",
-    prompt: "consent",
-    scope: [
-      "https://www.googleapis.com/auth/userinfo.email",
-      "https://www.googleapis.com/auth/userinfo.profile",
-      "https://www.googleapis.com/auth/gmail.send"
-    ],
-    state,
-  });
-  res.redirect(url);
-});
-
-app.get("/auth/google/callback", async (req, res) => {
-  try {
-    const { code } = req.query;
-    const { tokens } = await oAuth2Client.getToken(code);
-    oAuth2Client.setCredentials(tokens);
-
-    const oauth2 = google.oauth2({ version: "v2", auth: oAuth2Client });
-    const { data } = await oauth2.userinfo.get();
-
-    req.session.user = {
-      email: data.email,
-      name: data.name,
-      picture: data.picture,
-      tokens,
-    };
-
-    const redirectURL =
-      process.env.NODE_ENV === "production"
-        ? `https://minutemind-frontend.onrender.com/dashboard`
-        : `http://localhost:5317/dashboard`;
-
-    res.redirect(redirectURL);
-  } catch (error) {
-    console.error(error);
-    res.status(500).send("Authentication Failed");
-  }
-});
-
-app.get("/api/me", (req, res) => {
-  if (!req.session.user) return res.status(401).json({ loggedIn: false });
-  const { email, name, picture } = req.session.user;
-  res.json({ loggedIn: true, email, name, picture });
+app.get("/", (req, res) => {
+  res.send("Server is running ✅");
 });
 
 app.post("/api/summarize", async (req, res) => {
   try {
     const { transcript, prompt } = req.body;
+
     const completion = await groq.chat.completions.create({
       model: "llama-3.1-8b-instant",
       messages: [
@@ -112,45 +28,59 @@ app.post("/api/summarize", async (req, res) => {
         { role: "user", content: `${prompt}\n\nTranscript:\n${transcript}` },
       ],
     });
+
     const summary = completion.choices[0]?.message?.content || "No summary generated.";
     res.json({ summary });
-  } catch {
+  } catch (error) {
+    console.error("Summarization error:", error);
     res.status(500).json({ error: "Failed to summarize" });
   }
 });
 
 app.post("/api/send-email", async (req, res) => {
   try {
-    if (!req.session.user) return res.status(401).json({ error: "Not authenticated" });
-
     const { to, subject, content } = req.body;
-    const { email, tokens } = req.session.user;
 
-    if (!to || !subject || !content) return res.status(400).json({ error: "Missing email fields" });
+    if (!to || !subject || !content) {
+      return res.status(400).json({ error: "Missing email fields" });
+    }
 
-    oAuth2Client.setCredentials(tokens);
+    const oAuth2Client = new google.auth.OAuth2(
+      process.env.GMAIL_CLIENT_ID,
+      process.env.GMAIL_CLIENT_SECRET,
+      process.env.GMAIL_REDIRECT_URI
+    );
+
+    oAuth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+
     const accessTokenObj = await oAuth2Client.getAccessToken();
     const accessToken = accessTokenObj?.token;
 
-    if (!accessToken) return res.status(500).json({ error: "Failed to retrieve access token" });
+    if (!accessToken) {
+      console.error("Failed to get access token:", accessTokenObj);
+      return res.status(500).json({ error: "Failed to retrieve access token" });
+    }
 
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
         type: "OAuth2",
-        user: email,
+        user: process.env.EMAIL_USER,
         clientId: process.env.GMAIL_CLIENT_ID,
         clientSecret: process.env.GMAIL_CLIENT_SECRET,
-        refreshToken: tokens.refresh_token,
+        refreshToken: process.env.GMAIL_REFRESH_TOKEN,
         accessToken,
       },
     });
 
-    await transporter.sendMail({ from: email, to, subject, text: content });
+    await transporter.sendMail({ from: process.env.EMAIL_USER, to, subject, text: content });
+
     res.json({ success: true });
-  } catch {
-    res.status(500).json({ error: "Failed to send email" });
+  } catch (error) {
+    console.error("Email error:", error);
+    res.status(500).json({ error: "Failed to send email", details: error.toString() });
   }
 });
 
-app.listen(process.env.PORT, () => console.log(`Server running on http://localhost:${process.env.PORT}`));
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
