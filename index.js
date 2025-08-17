@@ -47,7 +47,7 @@ app.get("/auth/google", (req, res) => {
 
 app.get("/auth/google/callback", async (req, res) => {
   try {
-    const { code, state } = req.query;
+    const { code } = req.query;
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
 
@@ -61,10 +61,15 @@ app.get("/auth/google/callback", async (req, res) => {
       tokens,
     };
 
-    const redirectPath = state || "/"; 
-    res.redirect(`https://minutemind-frontend.onrender.com/${redirectPath}`);
+    // Dynamic redirect depending on environment
+    const redirectURL =
+      process.env.NODE_ENV === "production"
+        ? `https://minutemind-frontend.onrender.com/dashboard`
+        : `http://localhost:5317/dashboard`;
 
-  } catch {
+    res.redirect(redirectURL);
+  } catch (error) {
+    console.error(error);
     res.status(500).send("Authentication Failed");
   }
 });
